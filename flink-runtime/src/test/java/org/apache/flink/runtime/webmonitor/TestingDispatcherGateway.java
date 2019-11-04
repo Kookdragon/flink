@@ -72,16 +72,16 @@ public final class TestingDispatcherGateway extends TestingRestfulGateway implem
 			String address,
 			String hostname,
 			Function<JobID, CompletableFuture<Acknowledge>> cancelJobFunction,
-			Function<JobID, CompletableFuture<Acknowledge>> stopJobFunction,
 			Function<JobID, CompletableFuture<ArchivedExecutionGraph>> requestJobFunction,
 			Function<JobID, CompletableFuture<JobResult>> requestJobResultFunction,
 			Function<JobID, CompletableFuture<JobStatus>> requestJobStatusFunction,
 			Supplier<CompletableFuture<MultipleJobsDetails>> requestMultipleJobDetailsSupplier,
 			Supplier<CompletableFuture<ClusterOverview>> requestClusterOverviewSupplier,
-			Supplier<CompletableFuture<Collection<String>>> requestMetricQueryServicePathsSupplier,
-			Supplier<CompletableFuture<Collection<Tuple2<ResourceID, String>>>> requestTaskManagerMetricQueryServicePathsSupplier,
+			Supplier<CompletableFuture<Collection<String>>> requestMetricQueryServiceAddressesSupplier,
+			Supplier<CompletableFuture<Collection<Tuple2<ResourceID, String>>>> requestTaskManagerMetricQueryServiceGatewaysSupplier,
 			BiFunction<JobID, JobVertexID, CompletableFuture<OperatorBackPressureStatsResponse>> requestOperatorBackPressureStatsFunction,
 			BiFunction<JobID, String, CompletableFuture<String>> triggerSavepointFunction,
+			BiFunction<JobID, String, CompletableFuture<String>> stopWithSavepointFunction,
 			Function<JobGraph, CompletableFuture<Acknowledge>> submitFunction,
 			Supplier<CompletableFuture<Collection<JobID>>> listFunction,
 			int blobServerPort,
@@ -91,16 +91,16 @@ public final class TestingDispatcherGateway extends TestingRestfulGateway implem
 			address,
 			hostname,
 			cancelJobFunction,
-			stopJobFunction,
 			requestJobFunction,
 			requestJobResultFunction,
 			requestJobStatusFunction,
 			requestMultipleJobDetailsSupplier,
 			requestClusterOverviewSupplier,
-			requestMetricQueryServicePathsSupplier,
-			requestTaskManagerMetricQueryServicePathsSupplier,
+			requestMetricQueryServiceAddressesSupplier,
+			requestTaskManagerMetricQueryServiceGatewaysSupplier,
 			requestOperatorBackPressureStatsFunction,
-			triggerSavepointFunction);
+			triggerSavepointFunction,
+			stopWithSavepointFunction);
 		this.submitFunction = submitFunction;
 		this.listFunction = listFunction;
 		this.blobServerPort = blobServerPort;
@@ -135,7 +135,7 @@ public final class TestingDispatcherGateway extends TestingRestfulGateway implem
 	/**
 	 * Builder for the {@link TestingDispatcherGateway}.
 	 */
-	public static final class Builder extends TestingRestfulGateway.Builder {
+	public static final class Builder extends TestingRestfulGateway.AbstractBuilder<Builder> {
 
 		private Function<JobGraph, CompletableFuture<Acknowledge>> submitFunction;
 		private Supplier<CompletableFuture<Collection<JobID>>> listFunction;
@@ -159,9 +159,14 @@ public final class TestingDispatcherGateway extends TestingRestfulGateway implem
 		}
 
 		@Override
-		public TestingRestfulGateway.Builder setRequestJobFunction(Function<JobID, CompletableFuture<ArchivedExecutionGraph>> requestJobFunction) {
+		public Builder setRequestJobFunction(Function<JobID, CompletableFuture<ArchivedExecutionGraph>> requestJobFunction) {
 			// signature clash
 			throw new UnsupportedOperationException("Use setRequestArchivedJobFunction() instead.");
+		}
+
+		@Override
+		protected Builder self() {
+			return this;
 		}
 
 		public Builder setBlobServerPort(int blobServerPort) {
@@ -179,16 +184,16 @@ public final class TestingDispatcherGateway extends TestingRestfulGateway implem
 				address,
 				hostname,
 				cancelJobFunction,
-				stopJobFunction,
 				requestJobFunction,
 				requestJobResultFunction,
 				requestJobStatusFunction,
 				requestMultipleJobDetailsSupplier,
 				requestClusterOverviewSupplier,
-				requestMetricQueryServicePathsSupplier,
-				requestTaskManagerMetricQueryServicePathsSupplier,
+				requestMetricQueryServiceGatewaysSupplier,
+				requestTaskManagerMetricQueryServiceGatewaysSupplier,
 				requestOperatorBackPressureStatsFunction,
 				triggerSavepointFunction,
+				stopWithSavepointFunction,
 				submitFunction,
 				listFunction,
 				blobServerPort,

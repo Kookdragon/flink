@@ -90,7 +90,7 @@ public class ExecutionConfig implements Serializable, Archiveable<ArchivedExecut
 	/** Defines how data exchange happens - batch or pipelined */
 	private ExecutionMode executionMode = ExecutionMode.PIPELINED;
 
-	private boolean useClosureCleaner = true;
+	private ClosureCleanerLevel closureCleanerLevel = ClosureCleanerLevel.RECURSIVE;
 
 	private int parallelism = PARALLELISM_DEFAULT;
 
@@ -122,9 +122,6 @@ public class ExecutionConfig implements Serializable, Archiveable<ArchivedExecut
 
 	private CodeAnalysisMode codeAnalysisMode = CodeAnalysisMode.DISABLE;
 
-	/** If set to true, progress updates are printed to System.out during execution */
-	private boolean printProgressDuringExecution = true;
-
 	private long autoWatermarkInterval = 0;
 
 	/**
@@ -154,15 +151,21 @@ public class ExecutionConfig implements Serializable, Archiveable<ArchivedExecut
 	/** This flag defines if we use compression for the state snapshot data or not. Default: false */
 	private boolean useSnapshotCompression = false;
 
-	/** Determines if a task fails or not if there is an error in writing its checkpoint data. Default: true */
+	/**
+	 * @deprecated Should no longer be used because we would not support to let task directly fail on checkpoint error.
+	 */
+	@Deprecated
 	private boolean failTaskOnCheckpointError = true;
 
 	/** The default input dependency constraint to schedule tasks. */
 	private InputDependencyConstraint defaultInputDependencyConstraint = InputDependencyConstraint.ANY;
 
+	/** Flag to indicate whether to put all vertices into the same slot sharing group by default. */
+	private boolean allVerticesInSameSlotSharingGroupByDefault = true;
+
 	// ------------------------------- User code values --------------------------------------------
 
-	private GlobalJobParameters globalJobParameters;
+	private GlobalJobParameters globalJobParameters = new GlobalJobParameters();
 
 	// Serializers and types registered with Kryo and the PojoSerializer
 	// we store them in linked maps/sets to ensure they are registered in order in all kryo instances.
@@ -188,7 +191,7 @@ public class ExecutionConfig implements Serializable, Archiveable<ArchivedExecut
 	 * User code must be serializable because it needs to be sent to worker nodes.
 	 */
 	public ExecutionConfig enableClosureCleaner() {
-		useClosureCleaner = true;
+		this.closureCleanerLevel = ClosureCleanerLevel.RECURSIVE;
 		return this;
 	}
 
@@ -198,7 +201,7 @@ public class ExecutionConfig implements Serializable, Archiveable<ArchivedExecut
 	 * @see #enableClosureCleaner()
 	 */
 	public ExecutionConfig disableClosureCleaner() {
-		useClosureCleaner = false;
+		this.closureCleanerLevel = ClosureCleanerLevel.NONE;
 		return this;
 	}
 
@@ -208,7 +211,23 @@ public class ExecutionConfig implements Serializable, Archiveable<ArchivedExecut
 	 * @see #enableClosureCleaner()
 	 */
 	public boolean isClosureCleanerEnabled() {
-		return useClosureCleaner;
+		return !(closureCleanerLevel == ClosureCleanerLevel.NONE);
+	}
+
+	/**
+	 * Configures the closure cleaner. Please see {@link ClosureCleanerLevel} for details on the
+	 * different settings.
+	 */
+	public ExecutionConfig setClosureCleanerLevel(ClosureCleanerLevel level) {
+		this.closureCleanerLevel = level;
+		return this;
+	}
+
+	/**
+	 * Returns the configured {@link ClosureCleanerLevel}.
+	 */
+	public ClosureCleanerLevel getClosureCleanerLevel() {
+		return closureCleanerLevel;
 	}
 
 	/**
@@ -220,6 +239,7 @@ public class ExecutionConfig implements Serializable, Archiveable<ArchivedExecut
 	 */
 	@PublicEvolving
 	public ExecutionConfig setAutoWatermarkInterval(long interval) {
+		Preconditions.checkArgument(interval >= 0, "Auto watermark interval must not be negative.");
 		this.autoWatermarkInterval = interval;
 		return this;
 	}
@@ -529,7 +549,13 @@ public class ExecutionConfig implements Serializable, Archiveable<ArchivedExecut
 	 */
 	@PublicEvolving
 	public void setDefaultInputDependencyConstraint(InputDependencyConstraint inputDependencyConstraint) {
-		this.defaultInputDependencyConstraint = inputDependencyConstraint;
+		if (inputDependencyConstraint != null) {
+			this.defaultInputDependencyConstraint = inputDependencyConstraint;
+		} else {
+			// defaultInputDependencyConstraint is not allowed to be null
+			// setting it to ANY to not break existing jobs
+			this.defaultInputDependencyConstraint = InputDependencyConstraint.ANY;
+		}
 	}
 
 	/**
@@ -543,6 +569,32 @@ public class ExecutionConfig implements Serializable, Archiveable<ArchivedExecut
 	@PublicEvolving
 	public InputDependencyConstraint getDefaultInputDependencyConstraint() {
 		return defaultInputDependencyConstraint;
+	}
+
+	/**
+	 * Enables to put all vertices into the same slot sharing group by default.
+	 */
+	@Internal
+	public void enableAllVerticesInSameSlotSharingGroupByDefault() {
+		this.allVerticesInSameSlotSharingGroupByDefault = true;
+	}
+
+	/**
+	 * Disables to put all vertices into the same slot sharing group by default.
+	 */
+	@Internal
+	public void disableAllVerticesInSameSlotSharingGroupByDefault() {
+		this.allVerticesInSameSlotSharingGroupByDefault = false;
+	}
+
+	/**
+	 * Gets whether to put all vertices into the same slot sharing group by default.
+	 *
+	 * @return whether to put all vertices into the same slot sharing group by default.
+	 */
+	@Internal
+	public boolean isAllVerticesInSameSlotSharingGroupByDefault() {
+		return allVerticesInSameSlotSharingGroupByDefault;
 	}
 
 	/**
@@ -712,32 +764,27 @@ public class ExecutionConfig implements Serializable, Archiveable<ArchivedExecut
 	}
 
 	/**
-	 * Enables the printing of progress update messages to {@code System.out}
-	 * 
-	 * @return The ExecutionConfig object, to allow for function chaining.
+	 * @deprecated Ineffective. Will be removed at 2.0.
 	 */
+	@Deprecated
 	public ExecutionConfig enableSysoutLogging() {
-		this.printProgressDuringExecution = true;
 		return this;
 	}
 
 	/**
-	 * Disables the printing of progress update messages to {@code System.out}
-	 *
-	 * @return The ExecutionConfig object, to allow for function chaining.
+	 * @deprecated Ineffective. Will be removed at 2.0.
 	 */
+	@Deprecated
 	public ExecutionConfig disableSysoutLogging() {
-		this.printProgressDuringExecution = false;
 		return this;
 	}
 
 	/**
-	 * Gets whether progress update messages should be printed to {@code System.out}
-	 * 
-	 * @return True, if progress update messages should be printed, false otherwise.
+	 * @deprecated Ineffective. Will be removed at 2.0.
 	 */
+	@Deprecated
 	public boolean isSysoutLoggingEnabled() {
-		return this.printProgressDuringExecution;
+		return false;
 	}
 
 	public GlobalJobParameters getGlobalJobParameters() {
@@ -749,6 +796,7 @@ public class ExecutionConfig implements Serializable, Archiveable<ArchivedExecut
 	 * @param globalJobParameters Custom user configuration object
 	 */
 	public void setGlobalJobParameters(GlobalJobParameters globalJobParameters) {
+		Preconditions.checkNotNull(globalJobParameters, "globalJobParameters shouldn't be null");
 		this.globalJobParameters = globalJobParameters;
 	}
 
@@ -931,20 +979,22 @@ public class ExecutionConfig implements Serializable, Archiveable<ArchivedExecut
 	}
 
 	/**
-	 * This method is visible because of the way the configuration is currently forwarded from the checkpoint config to
-	 * the task. This should not be called by the user, please use CheckpointConfig.isFailTaskOnCheckpointError()
-	 * instead.
+	 * @deprecated This method takes no effect since we would not forward the configuration from the checkpoint config
+	 * to the task, and we have not supported task to fail on checkpoint error.
+	 * Please use CheckpointConfig.getTolerableCheckpointFailureNumber() to know the behavior on checkpoint errors.
 	 */
+	@Deprecated
 	@Internal
 	public boolean isFailTaskOnCheckpointError() {
 		return failTaskOnCheckpointError;
 	}
 
 	/**
-	 * This method is visible because of the way the configuration is currently forwarded from the checkpoint config to
-	 * the task. This should not be called by the user, please use CheckpointConfig.setFailOnCheckpointingErrors(...)
-	 * instead.
+	 * @deprecated This method takes no effect since we would not forward the configuration from the checkpoint config
+	 * to the task, and we have not supported task to fail on checkpoint error.
+	 * Please use CheckpointConfig.setTolerableCheckpointFailureNumber(int) to determine the behavior on checkpoint errors.
 	 */
+	@Deprecated
 	@Internal
 	public void setFailTaskOnCheckpointError(boolean failTaskOnCheckpointError) {
 		this.failTaskOnCheckpointError = failTaskOnCheckpointError;
@@ -957,7 +1007,7 @@ public class ExecutionConfig implements Serializable, Archiveable<ArchivedExecut
 
 			return other.canEqual(this) &&
 				Objects.equals(executionMode, other.executionMode) &&
-				useClosureCleaner == other.useClosureCleaner &&
+				closureCleanerLevel == other.closureCleanerLevel &&
 				parallelism == other.parallelism &&
 				((restartStrategyConfiguration == null && other.restartStrategyConfiguration == null) ||
 					(null != restartStrategyConfiguration && restartStrategyConfiguration.equals(other.restartStrategyConfiguration))) &&
@@ -967,7 +1017,6 @@ public class ExecutionConfig implements Serializable, Archiveable<ArchivedExecut
 				autoTypeRegistrationEnabled == other.autoTypeRegistrationEnabled &&
 				forceAvro == other.forceAvro &&
 				Objects.equals(codeAnalysisMode, other.codeAnalysisMode) &&
-				printProgressDuringExecution == other.printProgressDuringExecution &&
 				Objects.equals(globalJobParameters, other.globalJobParameters) &&
 				autoWatermarkInterval == other.autoWatermarkInterval &&
 				registeredTypesWithKryoSerializerClasses.equals(other.registeredTypesWithKryoSerializerClasses) &&
@@ -976,7 +1025,8 @@ public class ExecutionConfig implements Serializable, Archiveable<ArchivedExecut
 				registeredPojoTypes.equals(other.registeredPojoTypes) &&
 				taskCancellationIntervalMillis == other.taskCancellationIntervalMillis &&
 				useSnapshotCompression == other.useSnapshotCompression &&
-				defaultInputDependencyConstraint == other.defaultInputDependencyConstraint;
+				defaultInputDependencyConstraint == other.defaultInputDependencyConstraint &&
+				allVerticesInSameSlotSharingGroupByDefault == other.allVerticesInSameSlotSharingGroupByDefault;
 
 		} else {
 			return false;
@@ -987,7 +1037,7 @@ public class ExecutionConfig implements Serializable, Archiveable<ArchivedExecut
 	public int hashCode() {
 		return Objects.hash(
 			executionMode,
-			useClosureCleaner,
+				closureCleanerLevel,
 			parallelism,
 			restartStrategyConfiguration,
 			forceKryo,
@@ -996,7 +1046,6 @@ public class ExecutionConfig implements Serializable, Archiveable<ArchivedExecut
 			autoTypeRegistrationEnabled,
 			forceAvro,
 			codeAnalysisMode,
-			printProgressDuringExecution,
 			globalJobParameters,
 			autoWatermarkInterval,
 			registeredTypesWithKryoSerializerClasses,
@@ -1005,7 +1054,8 @@ public class ExecutionConfig implements Serializable, Archiveable<ArchivedExecut
 			registeredPojoTypes,
 			taskCancellationIntervalMillis,
 			useSnapshotCompression,
-			defaultInputDependencyConstraint);
+			defaultInputDependencyConstraint,
+			allVerticesInSameSlotSharingGroupByDefault);
 	}
 
 	public boolean canEqual(Object obj) {
@@ -1053,5 +1103,39 @@ public class ExecutionConfig implements Serializable, Archiveable<ArchivedExecut
 		public Map<String, String> toMap() {
 			return Collections.emptyMap();
 		}
+
+		@Override
+		public boolean equals(Object obj) {
+			if (obj == null || this.getClass() != obj.getClass()) {
+				return false;
+			}
+
+			return true;
+		}
+
+		@Override
+		public int hashCode() {
+			return Objects.hash();
+		}
+	}
+
+	/**
+	 * Configuration settings for the closure cleaner.
+	 */
+	public enum ClosureCleanerLevel {
+		/**
+		 * Disable the closure cleaner completely.
+		 */
+		NONE,
+
+		/**
+		 * Clean only the top-level class without recursing into fields.
+		 */
+		TOP_LEVEL,
+
+		/**
+		 * Clean all the fields recursively.
+		 */
+		RECURSIVE
 	}
 }

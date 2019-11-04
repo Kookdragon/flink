@@ -19,9 +19,9 @@
 package org.apache.flink.table.client.gateway.local;
 
 import org.apache.flink.api.common.JobExecutionResult;
+import org.apache.flink.client.ClientUtils;
 import org.apache.flink.client.deployment.ClusterDescriptor;
 import org.apache.flink.client.program.ClusterClient;
-import org.apache.flink.client.program.rest.RestClusterClient;
 import org.apache.flink.runtime.jobgraph.JobGraph;
 import org.apache.flink.table.client.gateway.SqlExecutionException;
 import org.apache.flink.table.client.gateway.local.result.Result;
@@ -122,7 +122,7 @@ public class ProgramDeployer<C> implements Runnable {
 			// get result
 			if (awaitJobResult) {
 				// we need to hard cast for now
-				final JobExecutionResult jobResult = ((RestClusterClient<T>) clusterClient)
+				final JobExecutionResult jobResult = clusterClient
 						.requestJobResult(jobGraph.getJobID())
 						.get()
 						.toJobExecutionResult(context.getClassLoader()); // throws exception if job fails
@@ -131,7 +131,7 @@ public class ProgramDeployer<C> implements Runnable {
 		} finally {
 			try {
 				if (clusterClient != null) {
-					clusterClient.shutdown();
+					clusterClient.close();
 				}
 			} catch (Exception e) {
 				// ignore
@@ -160,19 +160,16 @@ public class ProgramDeployer<C> implements Runnable {
 			result.setClusterInformation(clusterClient.getClusterId(), webInterfaceUrl);
 			// submit job (and get result)
 			if (awaitJobResult) {
-				clusterClient.setDetached(false);
-				final JobExecutionResult jobResult = clusterClient
-					.submitJob(jobGraph, context.getClassLoader())
-					.getJobExecutionResult(); // throws exception if job fails
+				// throws exception if job fails
+				final JobExecutionResult jobResult = ClientUtils.submitJobAndWaitForResult(clusterClient, jobGraph, context.getClassLoader());
 				executionResultBucket.add(jobResult);
 			} else {
-				clusterClient.setDetached(true);
-				clusterClient.submitJob(jobGraph, context.getClassLoader());
+				ClientUtils.submitJob(clusterClient, jobGraph);
 			}
 		} finally {
 			try {
 				if (clusterClient != null) {
-					clusterClient.shutdown();
+					clusterClient.close();
 				}
 			} catch (Exception e) {
 				// ignore

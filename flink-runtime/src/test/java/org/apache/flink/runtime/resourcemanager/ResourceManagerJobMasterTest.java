@@ -33,15 +33,14 @@ import org.apache.flink.runtime.jobmaster.utils.TestingJobMasterGateway;
 import org.apache.flink.runtime.jobmaster.utils.TestingJobMasterGatewayBuilder;
 import org.apache.flink.runtime.leaderelection.TestingLeaderElectionService;
 import org.apache.flink.runtime.leaderretrieval.SettableLeaderRetrievalService;
-import org.apache.flink.runtime.metrics.NoOpMetricRegistry;
 import org.apache.flink.runtime.metrics.groups.UnregisteredMetricGroups;
 import org.apache.flink.runtime.registration.RegistrationResponse;
 import org.apache.flink.runtime.resourcemanager.exceptions.ResourceManagerException;
 import org.apache.flink.runtime.resourcemanager.slotmanager.SlotManager;
+import org.apache.flink.runtime.resourcemanager.slotmanager.SlotManagerBuilder;
 import org.apache.flink.runtime.rpc.RpcUtils;
 import org.apache.flink.runtime.rpc.TestingRpcService;
 import org.apache.flink.runtime.rpc.exceptions.FencingTokenException;
-import org.apache.flink.runtime.testingUtils.TestingUtils;
 import org.apache.flink.runtime.util.TestingFatalErrorHandler;
 import org.apache.flink.util.ExceptionUtils;
 import org.apache.flink.util.FlinkRuntimeException;
@@ -137,11 +136,9 @@ public class ResourceManagerJobMasterTest extends TestLogger {
 			rpcService.getScheduledExecutor(),
 			Time.minutes(5L));
 
-		final SlotManager slotManager = new SlotManager(
-			rpcService.getScheduledExecutor(),
-			TestingUtils.infiniteTime(),
-			TestingUtils.infiniteTime(),
-			TestingUtils.infiniteTime());
+		final SlotManager slotManager = SlotManagerBuilder.newBuilder()
+			.setScheduledExecutor(rpcService.getScheduledExecutor())
+			.build();
 
 		ResourceManager<?> resourceManager = new StandaloneResourceManager(
 			rpcService,
@@ -150,11 +147,11 @@ public class ResourceManagerJobMasterTest extends TestLogger {
 			haServices,
 			heartbeatServices,
 			slotManager,
-			NoOpMetricRegistry.INSTANCE,
 			jobLeaderIdService,
 			new ClusterInformation("localhost", 1234),
 			testingFatalErrorHandler,
-			UnregisteredMetricGroups.createUnregisteredJobManagerMetricGroup());
+			UnregisteredMetricGroups.createUnregisteredResourceManagerMetricGroup(),
+			Time.minutes(5L));
 
 		resourceManager.start();
 

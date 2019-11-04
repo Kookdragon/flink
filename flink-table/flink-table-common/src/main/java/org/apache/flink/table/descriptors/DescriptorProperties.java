@@ -25,12 +25,18 @@ import org.apache.flink.configuration.MemorySize;
 import org.apache.flink.table.api.TableException;
 import org.apache.flink.table.api.TableSchema;
 import org.apache.flink.table.api.ValidationException;
+import org.apache.flink.table.api.WatermarkSpec;
+import org.apache.flink.table.types.DataType;
+import org.apache.flink.table.types.logical.utils.LogicalTypeParser;
+import org.apache.flink.table.types.utils.TypeConversions;
 import org.apache.flink.table.utils.EncodingUtils;
 import org.apache.flink.table.utils.TypeStringUtils;
 import org.apache.flink.util.InstantiationUtil;
 import org.apache.flink.util.Preconditions;
+import org.apache.flink.util.TimeUtils;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -70,6 +76,14 @@ public class DescriptorProperties {
 
 	public static final String TABLE_SCHEMA_TYPE = "type";
 
+	public static final String WATERMARK = "watermark";
+
+	public static final String WATERMARK_ROWTIME = "rowtime";
+
+	public static final String WATERMARK_STRATEGY_EXPRESSION = "strategy.expression";
+
+	public static final String WATERMARK_STRATEGY_DATATYPE = "strategy.datatype";
+
 	private static final Consumer<String> EMPTY_CONSUMER = (value) -> {};
 
 	private final boolean normalizeKeys;
@@ -100,6 +114,21 @@ public class DescriptorProperties {
 	public void putProperties(DescriptorProperties otherProperties) {
 		for (Map.Entry<String, String> otherProperty : otherProperties.properties.entrySet()) {
 			put(otherProperty.getKey(), otherProperty.getValue());
+		}
+	}
+
+	/**
+	 * Adds a properties map by appending the given prefix to element keys with a dot.
+	 *
+	 * <p>For example: for prefix "flink" and a map of a single property with key "k" and value "v".
+	 * The added property will be as key "flink.k" and value "v".
+	 */
+	public void putPropertiesWithPrefix(String prefix, Map<String, String> prop) {
+		checkNotNull(prefix);
+		checkNotNull(prop);
+
+		for (Map.Entry<String, String> e : prop.entrySet()) {
+			put(String.format("%s.%s", prefix, e.getKey()), e.getValue());
 		}
 	}
 
@@ -176,6 +205,20 @@ public class DescriptorProperties {
 			key,
 			Arrays.asList(TABLE_SCHEMA_NAME, TABLE_SCHEMA_TYPE),
 			values);
+
+		if (!schema.getWatermarkSpecs().isEmpty()) {
+			final List<List<String>> watermarkValues = new ArrayList<>();
+			for (WatermarkSpec spec : schema.getWatermarkSpecs()) {
+				watermarkValues.add(Arrays.asList(
+					spec.getRowtimeAttribute(),
+					spec.getWatermarkExpressionString(),
+					spec.getWatermarkExprOutputType().getLogicalType().asSerializableString()));
+			}
+			putIndexedFixedProperties(
+				key + '.' + WATERMARK,
+				Arrays.asList(WATERMARK_ROWTIME, WATERMARK_STRATEGY_EXPRESSION, WATERMARK_STRATEGY_DATATYPE),
+				watermarkValues);
+		}
 	}
 
 	/**
@@ -502,6 +545,28 @@ public class DescriptorProperties {
 
 			schemaBuilder.field(name, type);
 		}
+
+		// extract watermark information
+
+		// filter for number of fields
+		String watermarkPrefixKey = key + '.' + WATERMARK;
+		final int watermarkCount = properties.keySet().stream()
+			.filter((k) -> k.startsWith(watermarkPrefixKey) && k.endsWith('.' + WATERMARK_ROWTIME))
+			.mapToInt((k) -> 1)
+			.sum();
+		if (watermarkCount > 0) {
+			for (int i = 0; i < watermarkCount; i++) {
+				final String rowtimeKey = watermarkPrefixKey + '.' + i + '.' + WATERMARK_ROWTIME;
+				final String exprKey = watermarkPrefixKey + '.' + i + '.' + WATERMARK_STRATEGY_EXPRESSION;
+				final String typeKey = watermarkPrefixKey + '.' + i + '.' + WATERMARK_STRATEGY_DATATYPE;
+				final String rowtime = optionalGet(rowtimeKey).orElseThrow(exceptionSupplier(rowtimeKey));
+				final String exprString = optionalGet(exprKey).orElseThrow(exceptionSupplier(exprKey));
+				final String typeString = optionalGet(typeKey).orElseThrow(exceptionSupplier(typeKey));
+				final DataType exprType = TypeConversions.fromLogicalToDataType(LogicalTypeParser.parse(typeString));
+				schemaBuilder.watermark(rowtime, exprString, exprType);
+			}
+		}
+
 		return Optional.of(schemaBuilder.build());
 	}
 
@@ -530,6 +595,26 @@ public class DescriptorProperties {
 	 */
 	public MemorySize getMemorySize(String key) {
 		return getOptionalMemorySize(key).orElseThrow(exceptionSupplier(key));
+	}
+
+	/**
+	 * Returns a Java {@link Duration} under the given key if it exists.
+	 */
+	public Optional<Duration> getOptionalDuration(String key) {
+		return optionalGet(key).map((value) -> {
+			try {
+				return TimeUtils.parseDuration(value);
+			} catch (Exception e) {
+				throw new ValidationException("Invalid duration value for key '" + key + "'.", e);
+			}
+		});
+	}
+
+	/**
+	 * Returns a java {@link Duration} under the given existing key.
+	 */
+	public Duration getDuration(String key) {
+		return getOptionalDuration(key).orElseThrow(exceptionSupplier(key));
 	}
 
 	/**
@@ -703,6 +788,21 @@ public class DescriptorProperties {
 	 */
 	public boolean isValue(String key, String value) {
 		return optionalGet(key).orElseThrow(exceptionSupplier(key)).equals(value);
+	}
+
+	/**
+	 * Returns a map of properties whose key starts with the given prefix,
+	 * and the prefix is removed upon return.
+	 *
+	 * <p>For example, for prefix "flink" and a map of a single property with key "flink.k" and value "v",
+	 * this method will return it as key "k" and value "v" by identifying and removing the prefix "flink".
+	 */
+	public Map<String, String> getPropertiesWithPrefix(String prefix) {
+		String prefixWithDot = prefix + '.';
+
+		return properties.entrySet().stream()
+			.filter(e -> e.getKey().startsWith(prefixWithDot))
+			.collect(Collectors.toMap(e -> e.getKey().substring(prefix.length() + 1), Map.Entry::getValue));
 	}
 
 	// --------------------------------------------------------------------------------------------
@@ -1008,6 +1108,49 @@ public class DescriptorProperties {
 						"Memory size for key '" + key + "' must be a multiple of " + precision + " bytes but was: " + value);
 				}
 				return bytes;
+			}
+		);
+	}
+
+	/**
+	 * Validates a Java {@link Duration}.
+	 *
+	 * <p>The precision defines the allowed minimum unit in milliseconds (e.g. 1000 would only allow seconds).
+	 */
+	public void validateDuration(String key, boolean isOptional, int precision) {
+		validateDuration(key, isOptional, precision, 0L, Long.MAX_VALUE);
+	}
+
+	/**
+	 * Validates a Java {@link Duration}. The boundaries are inclusive and in milliseconds.
+	 *
+	 * <p>The precision defines the allowed minimum unit in milliseconds (e.g. 1000 would only allow seconds).
+	 */
+	public void validateDuration(String key, boolean isOptional, int precision, long min) {
+		validateDuration(key, isOptional, precision, min, Long.MAX_VALUE);
+	}
+
+	/**
+	 * Validates a Java {@link Duration}. The boundaries are inclusive and in milliseconds.
+	 *
+	 * <p>The precision defines the allowed minimum unit in milliseconds (e.g. 1000 would only allow seconds).
+	 */
+	public void validateDuration(String key, boolean isOptional, int precision, long min, long max) {
+		Preconditions.checkArgument(precision > 0);
+
+		validateComparable(
+			key,
+			isOptional,
+			min,
+			max,
+			"time interval (in milliseconds)",
+			(value) -> {
+				final long ms = TimeUtils.parseDuration(value).toMillis();
+				if (ms % precision != 0) {
+					throw new ValidationException(
+						"Duration for key '" + key + "' must be a multiple of " + precision + " milliseconds but was: " + value);
+				}
+				return ms;
 			}
 		);
 	}
